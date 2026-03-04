@@ -1,0 +1,30 @@
+# --- Build stage ---
+FROM python:3.11-slim AS builder
+
+WORKDIR /app
+
+# Install uv for fast dependency resolution
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy workspace config + packages first for cache
+COPY pyproject.toml uv.lock ./
+COPY packages/ packages/
+COPY apps/api/ apps/api/
+
+RUN uv sync --frozen --no-dev --package rentradar-api
+
+# --- Runtime stage ---
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY --from=builder /app/.venv /app/.venv
+COPY apps/api/ apps/api/
+COPY packages/ packages/
+
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 8000
+
+CMD ["uvicorn", "rentradar.main:app", "--host", "0.0.0.0", "--port", "8000"]

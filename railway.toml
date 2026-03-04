@@ -1,0 +1,12 @@
+[build]
+builder = "DOCKERFILE"
+
+# Override per service via Railway dashboard:
+#   api    → infra/Dockerfile.api
+#   worker → infra/Dockerfile.worker
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 10
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

@@ -25,6 +25,7 @@ app.conf.update(
     include=[
         "rentradar_workers.scrapers.tasks",
         "rentradar_workers.notifications.tasks",
+        "rentradar_workers.notifications.price_drop",
         "rentradar_workers.scoring.tasks",
         "rentradar_workers.permits.tasks",
     ],
