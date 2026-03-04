@@ -15,8 +15,13 @@ dependencies = [
     "python-jose[cryptography]>=3.3",
     "passlib[bcrypt]>=1.7",
     "python-multipart>=0.0.6",
+    "redis>=5.0",
+    "sse-starlette>=2.0",
     "rentradar-common",
 ]
+
+[tool.uv.sources]
+rentradar-common = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
