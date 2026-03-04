@@ -1,0 +1,1 @@
+"""RentRadar Celery workers."""
