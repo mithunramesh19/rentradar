@@ -5,6 +5,14 @@ description = "Rental Intelligence Platform — aggregates, scores, and alerts o
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
+dependencies = [
+    "rentradar-api",
+    "rentradar-common",
+]
+
+[tool.uv.sources]
+rentradar-api = { workspace = true }
+rentradar-common = { workspace = true }
 
 [tool.uv.workspace]
 members = ["apps/api", "workers", "packages/rentradar_common"]
