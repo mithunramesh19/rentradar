@@ -30,30 +30,29 @@ class TestParseListingPage:
         first = listings[0]
         assert first.source == ListingSource.STREETEASY
         assert first.address == "350 West 26th Street #4A"
-        assert first.price == "$3,200"
-        assert first.bedrooms == "2 bed"
-        assert first.bathrooms == "1 bath"
-        assert first.sqft == "850 ft²"
-        assert first.listed_by == "Listed by Compass"
+        assert first.price == 3200
+        assert first.bedrooms == 2
+        assert first.bathrooms == 1.0
+        assert first.sqft == 850
         assert first.source_url == "https://streeteasy.com/rental/1234567"
-        assert "photo1.jpg" in first.image_urls[0]
+        assert "photo1.jpg" in first.images[0]
 
     def test_second_listing_studio(self, scraper, search_html):
         listings = scraper.parse_listing_page(search_html)
         second = listings[1]
         assert second.address == "88 East 10th Street #2B"
-        assert second.price == "$2,100"
-        assert second.bedrooms == "Studio"
-        assert second.sqft == ""  # No sqft in fixture
+        assert second.price == 2100
+        assert second.bedrooms == 0  # "Studio" → 0
+        assert second.sqft is None  # No sqft in fixture
 
-    def test_title_extracted(self, scraper, search_html):
+    def test_raw_data_has_title(self, scraper, search_html):
         listings = scraper.parse_listing_page(search_html)
-        assert listings[0].title == "Spacious 2BR in Chelsea"
-        assert listings[1].title == "Sunny Studio in East Village"
+        assert listings[0].raw_data["title"] == "Spacious 2BR in Chelsea"
+        assert listings[1].raw_data["title"] == "Sunny Studio in East Village"
 
     def test_canonical_key_unique(self, scraper, search_html):
         listings = scraper.parse_listing_page(search_html)
-        keys = {l.canonical_key for l in listings}
+        keys = {listing.canonical_key for listing in listings}
         assert len(keys) == 2
 
 
@@ -61,4 +60,5 @@ class TestScraperConfig:
     def test_default_config(self, scraper):
         assert scraper.config.source == ListingSource.STREETEASY
         assert scraper.config.base_url == "https://streeteasy.com"
-        assert scraper.config.rate_limit_seconds == 3.0
+        assert scraper.config.use_browser is True
+        assert scraper.config.request_delay_range == (3.0, 6.0)

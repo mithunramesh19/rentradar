@@ -30,13 +30,16 @@ class TestParseListingPage:
         first = listings[0]
         assert first.source == ListingSource.ZILLOW
         assert first.address == "200 East 82nd Street, New York, NY"
-        assert first.price == "$4,500/mo"
-        assert first.bedrooms == "2 bd"
-        assert first.bathrooms == "2 ba"
-        assert first.sqft == "1,100 sqft"
-        assert "z1.jpg" in first.image_urls[0]
+        assert first.price == 4500
+        assert first.bedrooms == 2
+        assert first.bathrooms == 2.0
+        assert first.sqft == 1100
+        assert "z1.jpg" in first.images[0]
 
     def test_urls_fully_qualified(self, scraper, search_html):
         listings = scraper.parse_listing_page(search_html)
         for listing in listings:
             assert listing.source_url.startswith("https://")
+
+    def test_config_uses_browser(self, scraper):
+        assert scraper.config.use_browser is True

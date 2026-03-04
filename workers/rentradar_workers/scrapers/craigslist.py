@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import logging
 import random
+from typing import Any
 
 import requests
 from bs4 import BeautifulSoup, Tag
 
 from rentradar_common.constants import ListingSource
-from rentradar_workers.scrapers.base import BaseScraper, RawListing, SourceConfig
+from rentradar_workers.scrapers.base import (
+    BaseScraper,
+    RawListing,
+    SourceConfig,
+    parse_price,
+)
 from rentradar_workers.scrapers.tasks import register_scraper
 
 logger = logging.getLogger(__name__)
@@ -20,12 +26,10 @@ SEL_RESULT = "li.cl-static-search-result"
 SEL_TITLE = ".title"
 SEL_PRICE = ".price"
 SEL_DETAILS = ".details"
-SEL_POSTING_LINK = "a.posting-title"
 SEL_POST_BODY = "section#postingbody"
 SEL_MAP_ATTRS = "#map"  # data-latitude, data-longitude
 SEL_ATTRGROUP = "p.attrgroup span"
 
-# Craigslist NYC subdomains
 NYC_CL_URL = "https://newyork.craigslist.org"
 
 USER_AGENTS = [
@@ -43,9 +47,9 @@ class CraigslistScraper(BaseScraper):
             config = SourceConfig(
                 source=ListingSource.CRAIGSLIST,
                 base_url=NYC_CL_URL,
-                rate_limit_seconds=2.0,
+                scrape_interval_hours=2,
                 max_pages=20,
-                timeout_seconds=20,
+                request_delay_range=(2.0, 4.0),
             )
         super().__init__(config)
         self._session = requests.Session()
@@ -57,17 +61,17 @@ class CraigslistScraper(BaseScraper):
             }
         )
 
-    def scrape(self) -> list[RawListing]:
+    async def scrape(self, borough: str | None = None) -> list[RawListing]:
         """Scrape CL search results pages."""
         all_listings: list[RawListing] = []
         offset = 0
-        per_page = 120  # CL default page size
+        per_page = 120
 
         for page in range(1, self.config.max_pages + 1):
-            self.throttle()
+            self._rate_limit()
             url = f"{self.config.base_url}/search/apa#search=1~gallery~{offset}~0"
             try:
-                resp = self._session.get(url, timeout=self.config.timeout_seconds)
+                resp = self._session.get(url, timeout=20)
                 resp.raise_for_status()
             except requests.RequestException:
                 self.logger.exception("Failed to fetch page %d", page)
@@ -77,67 +81,34 @@ class CraigslistScraper(BaseScraper):
             if not page_listings:
                 break
             all_listings.extend(page_listings)
-            self.logger.info("Page %d: %d listings (total %d)", page, len(page_listings), len(all_listings))
+            self.logger.info(
+                "Page %d: %d listings (total %d)",
+                page,
+                len(page_listings),
+                len(all_listings),
+            )
             offset += per_page
 
         return all_listings
 
+    def parse_listing(self, raw: Any) -> RawListing:
+        """Parse a single CL search result element (BS4 Tag)."""
+        if not isinstance(raw, Tag):
+            raise TypeError(f"Expected BS4 Tag, got {type(raw)}")
+        return self._parse_result(raw)
+
     def parse_listing_page(self, html: str) -> list[RawListing]:
-        """Parse CL search page HTML."""
+        """Parse CL search page HTML (for tests/offline)."""
         soup = BeautifulSoup(html, "html.parser")
-        results = soup.select(SEL_RESULT)
         listings: list[RawListing] = []
 
-        for result in results:
+        for result in soup.select(SEL_RESULT):
             try:
-                listings.append(self._parse_result(result))
+                listings.append(self.parse_listing(result))
             except Exception:
                 self.logger.debug("Failed to parse CL result", exc_info=True)
 
         return listings
-
-    def parse_listing_detail(self, html: str, url: str) -> RawListing:
-        """Parse a CL posting detail page."""
-        soup = BeautifulSoup(html, "html.parser")
-
-        title_el = soup.select_one("#titletextonly")
-        title = title_el.get_text(strip=True) if title_el else ""
-
-        price_el = soup.select_one(".price")
-        price = price_el.get_text(strip=True) if price_el else ""
-
-        body_el = soup.select_one(SEL_POST_BODY)
-        description = body_el.get_text(strip=True) if body_el else ""
-
-        # Lat/lng from map element
-        map_el = soup.select_one(SEL_MAP_ATTRS)
-        lat = map_el.get("data-latitude", "") if map_el else ""
-        lng = map_el.get("data-longitude", "") if map_el else ""
-
-        # Attributes: beds, baths, sqft from attrgroup
-        beds = ""
-        baths = ""
-        sqft = ""
-        for span in soup.select(SEL_ATTRGROUP):
-            text = span.get_text(strip=True).lower()
-            if "br" in text and beds == "":
-                beds = text
-            elif "ba" in text and baths == "":
-                baths = text
-            elif "ft" in text and sqft == "":
-                sqft = text
-
-        return RawListing(
-            source=ListingSource.CRAIGSLIST,
-            source_url=url,
-            title=title,
-            price=price,
-            bedrooms=beds,
-            bathrooms=baths,
-            sqft=sqft,
-            description=description,
-            detail_data={"lat": lat, "lng": lng},
-        )
 
     def _parse_result(self, result: Tag) -> RawListing:
         """Parse a single CL search result element."""
@@ -145,7 +116,7 @@ class CraigslistScraper(BaseScraper):
         title = title_el.get_text(strip=True) if title_el else ""
 
         price_el = result.select_one(SEL_PRICE)
-        price = price_el.get_text(strip=True) if price_el else ""
+        price_text = price_el.get_text(strip=True) if price_el else ""
 
         link_el = result.select_one("a")
         href = link_el.get("href", "") if link_el else ""
@@ -158,9 +129,10 @@ class CraigslistScraper(BaseScraper):
         return RawListing(
             source=ListingSource.CRAIGSLIST,
             source_url=href,
-            title=title,
-            price=price,
+            address=title,
+            price=parse_price(price_text),
             description=details_text,
+            raw_data={"title": title, "price_raw": price_text},
         )
 
 

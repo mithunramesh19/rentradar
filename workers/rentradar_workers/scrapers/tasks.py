@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any
@@ -55,7 +56,7 @@ def run_scraper(self: Any, source: str) -> dict[str, Any]:
     logger.info("Starting scraper task for %s", source)
     try:
         scraper = get_scraper(source)
-        listings = scraper.scrape_with_metrics()
+        listings = asyncio.run(scraper.scrape_with_metrics())
         return {
             "source": source,
             "count": len(listings),

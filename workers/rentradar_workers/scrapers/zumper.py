@@ -5,14 +5,19 @@ from __future__ import annotations
 import json
 import logging
 import random
-import re
 from typing import Any
 
 import requests
 from bs4 import BeautifulSoup
 
 from rentradar_common.constants import ListingSource
-from rentradar_workers.scrapers.base import BaseScraper, RawListing, SourceConfig
+from rentradar_workers.scrapers.base import (
+    BaseScraper,
+    RawListing,
+    SourceConfig,
+    parse_float,
+    parse_int,
+)
 from rentradar_workers.scrapers.tasks import register_scraper
 
 logger = logging.getLogger(__name__)
@@ -54,9 +59,9 @@ class ZumperScraper(BaseScraper):
             config = SourceConfig(
                 source=ListingSource.ZUMPER,
                 base_url=ZUMPER_URL,
-                rate_limit_seconds=3.0,
+                scrape_interval_hours=8,
                 max_pages=10,
-                timeout_seconds=20,
+                request_delay_range=(3.0, 5.0),
             )
         super().__init__(config)
         self._session = requests.Session()
@@ -68,15 +73,19 @@ class ZumperScraper(BaseScraper):
             }
         )
 
-    def scrape(self) -> list[RawListing]:
+    async def scrape(self, borough: str | None = None) -> list[RawListing]:
         """Scrape Zumper search pages."""
         all_listings: list[RawListing] = []
 
         for page in range(1, self.config.max_pages + 1):
-            self.throttle()
-            url = f"{self.config.base_url}?page={page}" if page > 1 else self.config.base_url
+            self._rate_limit()
+            url = (
+                f"{self.config.base_url}?page={page}"
+                if page > 1
+                else self.config.base_url
+            )
             try:
-                resp = self._session.get(url, timeout=self.config.timeout_seconds)
+                resp = self._session.get(url, timeout=20)
                 resp.raise_for_status()
             except requests.RequestException:
                 self.logger.exception("Failed to fetch Zumper page %d", page)
@@ -87,18 +96,29 @@ class ZumperScraper(BaseScraper):
                 break
             all_listings.extend(page_listings)
             self.logger.info(
-                "Page %d: %d listings (total %d)", page, len(page_listings), len(all_listings)
+                "Page %d: %d listings (total %d)",
+                page,
+                len(page_listings),
+                len(all_listings),
             )
 
         return all_listings
 
+    def parse_listing(self, raw: Any) -> RawListing:
+        """Parse a single JSON-LD dict into a RawListing."""
+        if not isinstance(raw, dict):
+            raise TypeError(f"Expected dict, got {type(raw)}")
+        result = self._parse_ld_item(raw)
+        if result is None:
+            raise ValueError("Could not parse JSON-LD item (no address)")
+        return result
+
     def parse_listing_page(self, html: str) -> list[RawListing]:
-        """Parse listings from JSON-LD embedded in page HTML."""
+        """Parse listings from JSON-LD embedded in page HTML (for tests/offline)."""
         ld_blocks = extract_json_ld(html)
         listings: list[RawListing] = []
 
         for block in ld_blocks:
-            # Handle ItemList with individual listings
             if block.get("@type") == "ItemList":
                 for item in block.get("itemListElement", []):
                     actual = item.get("item", item)
@@ -109,8 +129,12 @@ class ZumperScraper(BaseScraper):
                     except Exception:
                         self.logger.debug("Failed to parse ItemList entry", exc_info=True)
 
-            # Handle individual Apartment/Residence entries
-            elif block.get("@type") in ("Apartment", "Residence", "SingleFamilyResidence", "House"):
+            elif block.get("@type") in (
+                "Apartment",
+                "Residence",
+                "SingleFamilyResidence",
+                "House",
+            ):
                 try:
                     listing = self._parse_ld_item(block)
                     if listing:
@@ -120,22 +144,8 @@ class ZumperScraper(BaseScraper):
 
         return listings
 
-    def parse_listing_detail(self, html: str, url: str) -> RawListing:
-        """Parse detail page from JSON-LD."""
-        ld_blocks = extract_json_ld(html)
-
-        for block in ld_blocks:
-            if block.get("@type") in ("Apartment", "Residence", "SingleFamilyResidence"):
-                listing = self._parse_ld_item(block)
-                if listing:
-                    listing.source_url = url
-                    return listing
-
-        return RawListing(source=ListingSource.ZUMPER, source_url=url)
-
     def _parse_ld_item(self, item: dict[str, Any]) -> RawListing | None:
         """Parse a single JSON-LD Apartment/Residence item."""
-        # Address from structured address object or string
         address_obj = item.get("address", {})
         if isinstance(address_obj, dict):
             parts = [
@@ -151,58 +161,60 @@ class ZumperScraper(BaseScraper):
             return None
 
         # Price from offers
-        price = ""
+        price: int | None = None
         offers = item.get("offers", {})
         if isinstance(offers, dict):
-            price_val = offers.get("price", offers.get("lowPrice", ""))
-            currency = offers.get("priceCurrency", "USD")
-            if price_val:
-                price = f"${price_val}" if currency == "USD" else f"{price_val} {currency}"
+            price = parse_int(offers.get("price", offers.get("lowPrice")))
         elif isinstance(offers, list) and offers:
-            price_val = offers[0].get("price", "")
-            if price_val:
-                price = f"${price_val}"
+            price = parse_int(offers[0].get("price"))
 
-        # Beds/baths
-        beds = str(item.get("numberOfBedrooms", item.get("numberOfRooms", "")))
-        baths = str(item.get("numberOfBathroomsTotal", item.get("numberOfBathrooms", "")))
+        beds = parse_int(item.get("numberOfBedrooms", item.get("numberOfRooms")))
+        baths = parse_float(
+            item.get("numberOfBathroomsTotal", item.get("numberOfBathrooms"))
+        )
 
         # Sqft
         floor_size = item.get("floorSize", {})
-        sqft = ""
+        sqft: int | None = None
         if isinstance(floor_size, dict):
-            sqft = str(floor_size.get("value", ""))
+            sqft = parse_int(floor_size.get("value"))
         elif floor_size:
-            sqft = str(floor_size)
+            sqft = parse_int(floor_size)
 
         # Images
-        images = item.get("image", item.get("photo", []))
-        if isinstance(images, str):
-            images = [images]
-        elif isinstance(images, list):
+        images_raw = item.get("image", item.get("photo", []))
+        if isinstance(images_raw, str):
+            images = [images_raw]
+        elif isinstance(images_raw, list):
             images = [
-                img.get("contentUrl", img.get("url", img)) if isinstance(img, dict) else str(img)
-                for img in images[:5]
+                img.get("contentUrl", img.get("url", img))
+                if isinstance(img, dict)
+                else str(img)
+                for img in images_raw[:5]
             ]
+        else:
+            images = []
 
         url = item.get("url", "")
         if url and not url.startswith("http"):
             url = f"https://www.zumper.com{url}"
 
+        geo = item.get("geo", {})
+
         return RawListing(
             source=ListingSource.ZUMPER,
             source_url=url,
-            title=item.get("name", ""),
             address=address,
             price=price,
-            bedrooms=beds if beds != "None" and beds else "",
-            bathrooms=baths if baths != "None" and baths else "",
-            sqft=sqft if sqft != "None" and sqft else "",
-            description=item.get("description", ""),
-            image_urls=images,
-            detail_data={
-                "lat": item.get("geo", {}).get("latitude") if isinstance(item.get("geo"), dict) else None,
-                "lng": item.get("geo", {}).get("longitude") if isinstance(item.get("geo"), dict) else None,
+            bedrooms=beds,
+            bathrooms=baths,
+            sqft=sqft,
+            description=item.get("description"),
+            images=images,
+            raw_data={
+                "name": item.get("name", ""),
+                "lat": geo.get("latitude") if isinstance(geo, dict) else None,
+                "lng": geo.get("longitude") if isinstance(geo, dict) else None,
             },
         )
 

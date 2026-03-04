@@ -43,14 +43,13 @@ class TestParseListingPage:
         listings = scraper.parse_listing_page(search_html)
         first = listings[0]
         assert first.source == ListingSource.ZUMPER
-        assert first.title == "Modern 1BR in Williamsburg"
         assert "150 North 4th Street" in first.address
-        assert "$2900" in first.price
-        assert first.bedrooms == "1"
-        assert first.bathrooms == "1"
-        assert first.sqft == "650"
-        assert len(first.image_urls) == 2
-        assert first.detail_data["lat"] == 40.7178
+        assert first.price == 2900
+        assert first.bedrooms == 1
+        assert first.bathrooms == 1.0
+        assert first.sqft == 650
+        assert len(first.images) == 2
+        assert first.raw_data["lat"] == 40.7178
 
     def test_relative_url_resolved(self, scraper, search_html):
         listings = scraper.parse_listing_page(search_html)
@@ -60,12 +59,19 @@ class TestParseListingPage:
     def test_second_listing_studio(self, scraper, search_html):
         listings = scraper.parse_listing_page(search_html)
         second = listings[1]
-        assert second.title == "Spacious Studio in Harlem"
-        assert second.bedrooms == "0"
-        assert "$1800" in second.price
+        assert second.raw_data["name"] == "Spacious Studio in Harlem"
+        assert second.bedrooms == 0
+        assert second.price == 1800
 
     def test_single_image_string(self, scraper, search_html):
         listings = scraper.parse_listing_page(search_html)
         second = listings[1]
-        assert len(second.image_urls) == 1
-        assert "b1.jpg" in second.image_urls[0]
+        assert len(second.images) == 1
+        assert "b1.jpg" in second.images[0]
+
+    def test_typed_fields(self, scraper, search_html):
+        listings = scraper.parse_listing_page(search_html)
+        for listing in listings:
+            assert isinstance(listing.price, int)
+            if listing.bedrooms is not None:
+                assert isinstance(listing.bedrooms, int)

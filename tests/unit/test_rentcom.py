@@ -43,10 +43,9 @@ class TestParseListingPage:
         listings = scraper.parse_listing_page(search_html)
         first = listings[0]
         assert first.source == ListingSource.RENTCOM
-        assert first.title == "The Beacon"
-        assert "2800" in first.price
-        assert first.bedrooms == "1"
-        assert first.neighborhood == "Newport"
+        assert first.price == 2800  # min of range
+        assert first.bedrooms == 1  # min of range
+        assert first.raw_data["neighborhood"] == "Newport"
 
     def test_relative_url_resolved(self, scraper, search_html):
         listings = scraper.parse_listing_page(search_html)
@@ -56,11 +55,17 @@ class TestParseListingPage:
     def test_second_listing_scalar_rent(self, scraper, search_html):
         listings = scraper.parse_listing_page(search_html)
         second = listings[1]
-        assert "3500" in second.price
-        assert second.bedrooms == "2"
+        assert second.price == 3500
+        assert second.bedrooms == 2
 
     def test_images_extracted(self, scraper, search_html):
         listings = scraper.parse_listing_page(search_html)
         first = listings[0]
-        assert len(first.image_urls) == 2
-        assert "photo1.jpg" in first.image_urls[0]
+        assert len(first.images) == 2
+        assert "photo1.jpg" in first.images[0]
+
+    def test_typed_fields(self, scraper, search_html):
+        listings = scraper.parse_listing_page(search_html)
+        for listing in listings:
+            assert isinstance(listing.price, int)
+            assert isinstance(listing.bedrooms, int)

@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import random
 import time
+from typing import Any
 
 from bs4 import BeautifulSoup, Tag
 
 from rentradar_common.constants import ListingSource
-from rentradar_workers.scrapers.base import BaseScraper, RawListing, SourceConfig
+from rentradar_workers.scrapers.base import (
+    BaseScraper,
+    RawListing,
+    SourceConfig,
+    parse_float,
+    parse_int,
+    parse_price,
+)
 from rentradar_workers.scrapers.tasks import register_scraper
 
 logger = logging.getLogger(__name__)
@@ -21,18 +28,10 @@ SEL_CARD = "article[data-test='property-card']"
 SEL_CARD_LINK = "a[data-test='property-card-link']"
 SEL_CARD_PRICE = "[data-test='property-card-price']"
 SEL_CARD_ADDRESS = "address[data-test='property-card-addr']"
-SEL_CARD_BEDS = "abbr[aria-label*='bed']"  # e.g. "2 bd"
+SEL_CARD_BEDS = "abbr[aria-label*='bed']"
 SEL_CARD_BATHS = "abbr[aria-label*='bath']"
 SEL_CARD_SQFT = "abbr[aria-label*='sqft']"
 SEL_CARD_IMG = "img[data-test='property-card-img']"
-
-# Detail page
-SEL_DETAIL_PRICE = "span[data-testid='price']"
-SEL_DETAIL_ADDRESS = "h1[data-testid='bdp-address']"
-SEL_DETAIL_BEDS = "span[data-testid='bed-bath-item']:nth-of-type(1)"
-SEL_DETAIL_BATHS = "span[data-testid='bed-bath-item']:nth-of-type(2)"
-SEL_DETAIL_SQFT = "span[data-testid='bed-bath-item']:nth-of-type(3)"
-SEL_DETAIL_DESC = "div[data-testid='description-text']"
 
 ZILLOW_NYC_URL = "https://www.zillow.com/new-york-ny/rentals/"
 
@@ -50,13 +49,14 @@ class ZillowScraper(BaseScraper):
             config = SourceConfig(
                 source=ListingSource.ZILLOW,
                 base_url=ZILLOW_NYC_URL,
-                rate_limit_seconds=5.0,
+                scrape_interval_hours=12,
                 max_pages=10,
-                timeout_seconds=30,
+                request_delay_range=(5.0, 8.0),
+                use_browser=True,
             )
         super().__init__(config)
 
-    def scrape(self) -> list[RawListing]:
+    async def scrape(self, borough: str | None = None) -> list[RawListing]:
         """Scrape Zillow using Playwright with stealth."""
         from playwright.sync_api import sync_playwright
 
@@ -69,7 +69,6 @@ class ZillowScraper(BaseScraper):
                 viewport={"width": 1920, "height": 1080},
                 java_script_enabled=True,
             )
-            # Stealth: remove webdriver flag
             context.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
                 Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});
@@ -78,11 +77,15 @@ class ZillowScraper(BaseScraper):
             page = context.new_page()
 
             for page_num in range(1, self.config.max_pages + 1):
-                self.throttle()
-                url = f"{self.config.base_url}{page_num}_p/" if page_num > 1 else self.config.base_url
+                self._rate_limit()
+                url = (
+                    f"{self.config.base_url}{page_num}_p/"
+                    if page_num > 1
+                    else self.config.base_url
+                )
 
                 try:
-                    page.goto(url, timeout=self.config.timeout_seconds * 1000)
+                    page.goto(url, timeout=30000)
                     page.wait_for_selector(SEL_CARD, timeout=10000)
                     time.sleep(random.uniform(1, 3))
 
@@ -105,41 +108,28 @@ class ZillowScraper(BaseScraper):
 
         return all_listings
 
+    def parse_listing(self, raw: Any) -> RawListing:
+        """Parse a single Zillow property card (BS4 Tag)."""
+        if not isinstance(raw, Tag):
+            raise TypeError(f"Expected BS4 Tag, got {type(raw)}")
+        return self._parse_card(raw)
+
     def parse_listing_page(self, html: str) -> list[RawListing]:
-        """Parse Zillow search page HTML."""
+        """Parse Zillow search page HTML (for tests/offline)."""
         soup = BeautifulSoup(html, "html.parser")
-        cards = soup.select(SEL_CARD)
         listings: list[RawListing] = []
 
-        for card in cards:
+        for card in soup.select(SEL_CARD):
             try:
-                listings.append(self._parse_card(card))
+                listings.append(self.parse_listing(card))
             except Exception:
                 self.logger.debug("Failed to parse Zillow card", exc_info=True)
 
         return listings
 
-    def parse_listing_detail(self, html: str, url: str) -> RawListing:
-        """Parse Zillow detail page."""
-        soup = BeautifulSoup(html, "html.parser")
-
-        def text(sel: str) -> str:
-            el = soup.select_one(sel)
-            return el.get_text(strip=True) if el else ""
-
-        return RawListing(
-            source=ListingSource.ZILLOW,
-            source_url=url,
-            address=text(SEL_DETAIL_ADDRESS),
-            price=text(SEL_DETAIL_PRICE),
-            bedrooms=text(SEL_DETAIL_BEDS),
-            bathrooms=text(SEL_DETAIL_BATHS),
-            sqft=text(SEL_DETAIL_SQFT),
-            description=text(SEL_DETAIL_DESC),
-        )
-
     def _parse_card(self, card: Tag) -> RawListing:
         """Parse a single Zillow property card."""
+
         def _text(sel: str) -> str:
             el = card.select_one(sel)
             return el.get_text(strip=True) if el else ""
@@ -159,11 +149,11 @@ class ZillowScraper(BaseScraper):
             source=ListingSource.ZILLOW,
             source_url=href or f"https://zillow.com#{address}",
             address=address,
-            price=_text(SEL_CARD_PRICE),
-            bedrooms=_text(SEL_CARD_BEDS),
-            bathrooms=_text(SEL_CARD_BATHS),
-            sqft=_text(SEL_CARD_SQFT),
-            image_urls=[img_url] if img_url else [],
+            price=parse_price(_text(SEL_CARD_PRICE)),
+            bedrooms=parse_int(_text(SEL_CARD_BEDS)),
+            bathrooms=parse_float(_text(SEL_CARD_BATHS)),
+            sqft=parse_int(_text(SEL_CARD_SQFT)),
+            images=[img_url] if img_url else [],
         )
 
 

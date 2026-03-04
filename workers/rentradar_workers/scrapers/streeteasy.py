@@ -22,17 +22,18 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium_stealth import stealth
-from tenacity import (
-    before_sleep_log,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
 from webdriver_manager.chrome import ChromeDriverManager
 
 from rentradar_common.constants import ListingSource
-from rentradar_workers.scrapers.base import BaseScraper, RawListing, SourceConfig
+from rentradar_workers.scrapers.base import (
+    BaseScraper,
+    BlockedError,
+    RawListing,
+    SourceConfig,
+    parse_float,
+    parse_int,
+    parse_price,
+)
 from rentradar_workers.scrapers.tasks import register_scraper
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,7 @@ BLOCK_XPATHS = [
 # ── Helper functions ─────────────────────────────────────────────────
 
 
-def is_blocked(driver: webdriver.Chrome) -> tuple[bool, str | None]:
+def _check_blocked(driver: webdriver.Chrome) -> tuple[bool, str | None]:
     """Check if StreetEasy or Cloudflare is blocking us."""
     try:
         for xpath in BLOCK_XPATHS:
@@ -280,86 +281,65 @@ class StreetEasyScraper(BaseScraper):
             config = SourceConfig(
                 source=ListingSource.STREETEASY,
                 base_url="https://streeteasy.com",
-                rate_limit_seconds=3.0,
+                scrape_interval_hours=6,
                 max_pages=10,
-                timeout_seconds=30,
+                request_delay_range=(3.0, 6.0),
+                use_browser=True,
                 max_retries=3,
             )
         super().__init__(config)
         self.search_urls = list(DEFAULT_SEARCH_URLS)
 
-    def scrape(self) -> list[RawListing]:
+    async def scrape(self, borough: str | None = None) -> list[RawListing]:
         """Run full scrape: iterate search URLs × pages, extract cards."""
         all_listings: list[RawListing] = []
 
         for search_url in self.search_urls:
             for page in range(1, self.config.max_pages + 1):
-                self.throttle()
+                self._rate_limit()
                 page_listings = self._scrape_page(search_url, page)
                 if not page_listings:
                     self.logger.info("No more listings at page %d, moving on", page)
                     break
                 all_listings.extend(page_listings)
                 self.logger.info(
-                    "Page %d: %d listings (total: %d)", page, len(page_listings), len(all_listings)
+                    "Page %d: %d listings (total: %d)",
+                    page,
+                    len(page_listings),
+                    len(all_listings),
                 )
 
         return all_listings
 
-    def parse_listing_page(self, html: str) -> list[RawListing]:
-        """Parse a search results page HTML into RawListings.
+    def parse_listing(self, raw: Any) -> RawListing:
+        """Parse a single card element (BS4 Tag) into a RawListing."""
+        from bs4 import Tag
 
-        Uses BeautifulSoup for offline/test parsing of saved HTML.
-        """
+        if isinstance(raw, Tag):
+            return self._parse_card_bs4(raw)
+        raise TypeError(f"Expected BS4 Tag, got {type(raw)}")
+
+    def _is_blocked(self, response_or_page: Any) -> bool:
+        """Check Selenium driver for block indicators."""
+        if isinstance(response_or_page, webdriver.Chrome):
+            blocked, _ = _check_blocked(response_or_page)
+            return blocked
+        return False
+
+    def parse_listing_page(self, html: str) -> list[RawListing]:
+        """Parse a search results page HTML into RawListings (for tests/offline)."""
         from bs4 import BeautifulSoup
 
         soup = BeautifulSoup(html, "html.parser")
         listings: list[RawListing] = []
 
-        cards = soup.select(SEL_LISTING_CARD)
-        for card in cards:
+        for card in soup.select(SEL_LISTING_CARD):
             try:
-                listings.append(self._parse_card_bs4(card))
+                listings.append(self.parse_listing(card))
             except Exception:
                 self.logger.debug("Failed to parse card", exc_info=True)
 
         return listings
-
-    def parse_listing_detail(self, html: str, url: str) -> RawListing:
-        """Parse a detail page HTML into a RawListing."""
-        from bs4 import BeautifulSoup
-
-        soup = BeautifulSoup(html, "html.parser")
-
-        def text(sel: str) -> str:
-            el = soup.select_one(sel)
-            return el.get_text(strip=True) if el else ""
-
-        address = text(SEL_DETAIL_ADDRESS)
-        price = text(SEL_PRICE)
-
-        # Building info
-        building = soup.select_one(SEL_BUILDING_SECTION)
-        neighborhood = ""
-        if building:
-            spans = building.select(SEL_BUILDING_INFO)
-            if spans:
-                neighborhood = spans[-1].get_text(strip=True)
-
-        return RawListing(
-            source=ListingSource.STREETEASY,
-            source_url=url,
-            address=address,
-            price=price,
-            neighborhood=neighborhood,
-            detail_data={
-                "listed_by": text(SEL_DETAIL_LISTED_BY),
-                "availability": text(SEL_DETAIL_AVAILABILITY),
-                "days_on_market": text(SEL_DETAIL_DOM),
-                "last_change": text(SEL_DETAIL_LAST_CHANGE),
-                "about": text(SEL_ABOUT),
-            },
-        )
 
     # ── Private methods ──────────────────────────────────────────────
 
@@ -374,7 +354,7 @@ class StreetEasyScraper(BaseScraper):
                 driver = get_driver()
                 driver.get(url)
 
-                blocked, block_type = is_blocked(driver)
+                blocked, block_type = _check_blocked(driver)
                 if blocked:
                     self.logger.warning("Blocked (%s) on attempt %d", block_type, attempt)
                     handle_block_retry(driver, url)
@@ -390,11 +370,15 @@ class StreetEasyScraper(BaseScraper):
                 return listings
 
             except WebDriverException:
-                self.logger.warning("WebDriver error on attempt %d/%d", attempt, self.config.max_retries)
+                self.logger.warning(
+                    "WebDriver error on attempt %d/%d", attempt, self.config.max_retries
+                )
                 wait = (2**attempt) + random.uniform(0, attempt)
                 time.sleep(wait)
             except Exception:
-                self.logger.exception("Unexpected error on page %d attempt %d", page_num, attempt)
+                self.logger.exception(
+                    "Unexpected error on page %d attempt %d", page_num, attempt
+                )
                 break
             finally:
                 if driver:
@@ -411,6 +395,7 @@ class StreetEasyScraper(BaseScraper):
 
         for card in cards:
             try:
+
                 def _text(sel: str) -> str:
                     try:
                         return card.find_element(By.CSS_SELECTOR, sel).text.strip()
@@ -419,7 +404,9 @@ class StreetEasyScraper(BaseScraper):
 
                 def _attr(sel: str, attr: str) -> str:
                     try:
-                        return card.find_element(By.CSS_SELECTOR, sel).get_attribute(attr) or ""
+                        return (
+                            card.find_element(By.CSS_SELECTOR, sel).get_attribute(attr) or ""
+                        )
                     except NoSuchElementException:
                         return ""
 
@@ -427,27 +414,48 @@ class StreetEasyScraper(BaseScraper):
                 detail_url = _attr(SEL_ADDRESS, "href")
 
                 # Beds/baths/sqft from list items
-                bbs_items = card.find_elements(By.CSS_SELECTOR, f"{SEL_BEDS_BATHS_SQFT} li")
-                beds = bbs_items[0].find_element(By.CSS_SELECTOR, SEL_BBS_TEXT).text.strip() if len(bbs_items) > 0 else ""
-                baths = bbs_items[1].find_element(By.CSS_SELECTOR, SEL_BBS_TEXT).text.strip() if len(bbs_items) > 1 else ""
-                sqft = bbs_items[2].find_element(By.CSS_SELECTOR, SEL_BBS_TEXT).text.strip() if len(bbs_items) > 2 else ""
+                bbs_items = card.find_elements(
+                    By.CSS_SELECTOR, f"{SEL_BEDS_BATHS_SQFT} li"
+                )
+                beds_raw = (
+                    bbs_items[0]
+                    .find_element(By.CSS_SELECTOR, SEL_BBS_TEXT)
+                    .text.strip()
+                    if len(bbs_items) > 0
+                    else ""
+                )
+                baths_raw = (
+                    bbs_items[1]
+                    .find_element(By.CSS_SELECTOR, SEL_BBS_TEXT)
+                    .text.strip()
+                    if len(bbs_items) > 1
+                    else ""
+                )
+                sqft_raw = (
+                    bbs_items[2]
+                    .find_element(By.CSS_SELECTOR, SEL_BBS_TEXT)
+                    .text.strip()
+                    if len(bbs_items) > 2
+                    else ""
+                )
 
-                # Image URL
-                image_url = _attr(f"{SEL_IMAGE}.isActiveImage", "src") or _attr(SEL_IMAGE, "src")
+                image_url = _attr(f"{SEL_IMAGE}.isActiveImage", "src") or _attr(
+                    SEL_IMAGE, "src"
+                )
 
                 listings.append(
                     RawListing(
                         source=ListingSource.STREETEASY,
                         source_url=detail_url or f"https://streeteasy.com#{address}",
-                        title=_text(SEL_TITLE),
                         address=address,
-                        price=_text(SEL_PRICE),
-                        bedrooms=beds,
-                        bathrooms=baths,
-                        sqft=sqft,
-                        listed_by=_text(SEL_LISTED_BY),
-                        image_urls=[image_url] if image_url else [],
-                        detail_data={
+                        price=parse_price(_text(SEL_PRICE)),
+                        bedrooms=parse_int(beds_raw),
+                        bathrooms=parse_float(baths_raw),
+                        sqft=parse_int(sqft_raw),
+                        images=[image_url] if image_url else [],
+                        raw_data={
+                            "title": _text(SEL_TITLE),
+                            "listed_by": _text(SEL_LISTED_BY),
                             "base_rent_tooltip": _text(SEL_BASE_RENT),
                             "price_tag": _text(SEL_PRICE_TAG),
                         },
@@ -461,6 +469,7 @@ class StreetEasyScraper(BaseScraper):
     @staticmethod
     def _parse_card_bs4(card: Any) -> RawListing:
         """Parse a single card from BeautifulSoup element."""
+
         def _text(sel: str) -> str:
             el = card.select_one(sel)
             return el.get_text(strip=True) if el else ""
@@ -473,9 +482,21 @@ class StreetEasyScraper(BaseScraper):
         detail_url = _attr(SEL_ADDRESS, "href")
 
         bbs_items = card.select(f"{SEL_BEDS_BATHS_SQFT} li")
-        beds = bbs_items[0].select_one(SEL_BBS_TEXT).get_text(strip=True) if len(bbs_items) > 0 and bbs_items[0].select_one(SEL_BBS_TEXT) else ""
-        baths = bbs_items[1].select_one(SEL_BBS_TEXT).get_text(strip=True) if len(bbs_items) > 1 and bbs_items[1].select_one(SEL_BBS_TEXT) else ""
-        sqft_text = bbs_items[2].select_one(SEL_BBS_TEXT).get_text(strip=True) if len(bbs_items) > 2 and bbs_items[2].select_one(SEL_BBS_TEXT) else ""
+        beds_raw = (
+            bbs_items[0].select_one(SEL_BBS_TEXT).get_text(strip=True)
+            if len(bbs_items) > 0 and bbs_items[0].select_one(SEL_BBS_TEXT)
+            else ""
+        )
+        baths_raw = (
+            bbs_items[1].select_one(SEL_BBS_TEXT).get_text(strip=True)
+            if len(bbs_items) > 1 and bbs_items[1].select_one(SEL_BBS_TEXT)
+            else ""
+        )
+        sqft_raw = (
+            bbs_items[2].select_one(SEL_BBS_TEXT).get_text(strip=True)
+            if len(bbs_items) > 2 and bbs_items[2].select_one(SEL_BBS_TEXT)
+            else ""
+        )
 
         img = card.select_one(f"{SEL_IMAGE}.isActiveImage") or card.select_one(SEL_IMAGE)
         image_url = img.get("src", "") if img else ""
@@ -483,14 +504,16 @@ class StreetEasyScraper(BaseScraper):
         return RawListing(
             source=ListingSource.STREETEASY,
             source_url=detail_url or f"https://streeteasy.com#{address}",
-            title=_text(SEL_TITLE),
             address=address,
-            price=_text(SEL_PRICE),
-            bedrooms=beds,
-            bathrooms=baths,
-            sqft=sqft_text,
-            listed_by=_text(SEL_LISTED_BY),
-            image_urls=[image_url] if image_url else [],
+            price=parse_price(_text(SEL_PRICE)),
+            bedrooms=parse_int(beds_raw),
+            bathrooms=parse_float(baths_raw),
+            sqft=parse_int(sqft_raw),
+            images=[image_url] if image_url else [],
+            raw_data={
+                "title": _text(SEL_TITLE),
+                "listed_by": _text(SEL_LISTED_BY),
+            },
         )
 
 
