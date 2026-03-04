@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from rentradar.database import engine
-from rentradar.routers import health, sse
+from rentradar.routers import auth, health, listings, notifications, saved_searches, sse
 
 
 @asynccontextmanager
@@ -31,4 +31,8 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(auth.router)
+app.include_router(listings.router)
+app.include_router(saved_searches.router)
+app.include_router(notifications.router)
 app.include_router(sse.router)
