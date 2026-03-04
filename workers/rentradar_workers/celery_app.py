@@ -31,5 +31,39 @@ app.conf.update(
     ],
 )
 
-# Beat schedule — configured per source via env vars
-app.conf.beat_schedule = {}
+# ── Beat schedule — configurable per source via env vars ──────────────
+# Override intervals with env: SCRAPE_INTERVAL_STREETEASY=4 (hours)
+
+from celery.schedules import crontab
+
+from rentradar_common.constants import DEFAULT_SCRAPE_INTERVALS, ListingSource
+
+
+def _build_beat_schedule() -> dict:
+    """Build Celery Beat schedule from defaults + env overrides."""
+    schedule = {}
+    for source in ListingSource:
+        env_key = f"SCRAPE_INTERVAL_{source.value.upper()}"
+        default_hours = DEFAULT_SCRAPE_INTERVALS.get(source, 8)
+        hours = float(os.getenv(env_key, str(default_hours)))
+
+        # Skip disabled sources (interval <= 0)
+        if hours <= 0:
+            continue
+
+        schedule[f"scrape-{source.value}"] = {
+            "task": "scrapers.run_scraper",
+            "schedule": hours * 3600,  # Convert hours to seconds
+            "args": [source.value],
+        }
+
+    # Listing removal detection — every 12 hours
+    schedule["detect-removed-listings"] = {
+        "task": "scrapers.detect_removed",
+        "schedule": crontab(minute=0, hour="*/12"),
+    }
+
+    return schedule
+
+
+app.conf.beat_schedule = _build_beat_schedule()

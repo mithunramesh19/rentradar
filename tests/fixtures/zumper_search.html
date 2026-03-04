@@ -1,0 +1,67 @@
+<!-- Zumper search results fixture with JSON-LD -->
+<html>
+<head>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "ItemList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "item": {
+        "@type": "Apartment",
+        "name": "Modern 1BR in Williamsburg",
+        "url": "/apartments-for-rent/new-york-ny/apt-1001",
+        "address": {
+          "@type": "PostalAddress",
+          "streetAddress": "150 North 4th Street",
+          "addressLocality": "Brooklyn",
+          "addressRegion": "NY",
+          "postalCode": "11249"
+        },
+        "numberOfBedrooms": 1,
+        "numberOfBathroomsTotal": 1,
+        "floorSize": {"@type": "QuantitativeValue", "value": 650, "unitCode": "SQF"},
+        "offers": {
+          "@type": "Offer",
+          "price": 2900,
+          "priceCurrency": "USD"
+        },
+        "geo": {
+          "@type": "GeoCoordinates",
+          "latitude": 40.7178,
+          "longitude": -73.9614
+        },
+        "image": [
+          {"contentUrl": "https://photos.zumper.com/a1.jpg"},
+          {"contentUrl": "https://photos.zumper.com/a2.jpg"}
+        ],
+        "description": "Bright apartment with exposed brick."
+      }
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "item": {
+        "@type": "Apartment",
+        "name": "Spacious Studio in Harlem",
+        "url": "https://www.zumper.com/apartments-for-rent/new-york-ny/apt-1002",
+        "address": {
+          "@type": "PostalAddress",
+          "streetAddress": "2100 Frederick Douglass Blvd",
+          "addressLocality": "New York",
+          "addressRegion": "NY"
+        },
+        "numberOfBedrooms": 0,
+        "numberOfBathroomsTotal": 1,
+        "offers": {"@type": "Offer", "price": 1800, "priceCurrency": "USD"},
+        "image": "https://photos.zumper.com/b1.jpg"
+      }
+    }
+  ]
+}
+</script>
+</head>
+<body></body>
+</html>
