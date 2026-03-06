@@ -49,7 +49,7 @@ class TestParseInt:
         assert parse_int(5) == 5
 
     def test_sqft_text(self):
-        assert parse_int("1,100 sqft") == 1
+        assert parse_int("1,100 sqft") == 1100
 
     def test_float_input(self):
         assert parse_int(2.5) == 2

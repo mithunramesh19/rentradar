@@ -4,6 +4,14 @@ import polars as pl
 import pytest
 
 
+def _has_tabula() -> bool:
+    try:
+        import tabula  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def test_compute_bbl():
     """BBL = borough(1) + block(5 zero-padded) + lot(4 zero-padded)."""
     from rentradar.models.rent_stabilized import RentStabilizedBuilding
@@ -42,6 +50,10 @@ def test_model_repr():
     assert "10001" in repr(b)
 
 
+@pytest.mark.skipif(
+    not _has_tabula(),
+    reason="tabula-py not installed",
+)
 def test_clean_data():
     """Test the clean_data function from ingest_hcr."""
     import sys

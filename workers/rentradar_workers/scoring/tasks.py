@@ -9,7 +9,7 @@ from rentradar_workers.celery_app import app
 
 log = logging.getLogger(__name__)
 
-DB_URL = os.getenv("DATABASE_URL", "postgresql://rentradar:rentradar@localhost:5432/rentradar")
+DB_URL = os.getenv("DATABASE_URL", "postgresql://rentradar:rentradar@localhost:5433/rentradar")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 

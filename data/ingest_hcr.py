@@ -31,7 +31,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 DEFAULT_PDF = Path.home() / "Rent Project" / "manhattan_rent_stabilized.pdf"
-DEFAULT_DB_URL = "postgresql://rentradar:rentradar@localhost:5432/rentradar"
+DEFAULT_DB_URL = "postgresql://rentradar:rentradar@localhost:5433/rentradar"
 
 EXPECTED_COLUMNS = [
     "ZIP", "BLDGNO1", "STREET1", "STSUFX1", "BLDGNO2",

@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # ── Parse helpers (raw strings → typed values) ───────────────────────
 
 _PRICE_RE = re.compile(r"[\$]?\s*([\d,]+)")
-_INT_RE = re.compile(r"(\d+)")
+_INT_RE = re.compile(r"([\d,]+)")
 _FLOAT_RE = re.compile(r"([\d.]+)")
 
 
@@ -54,7 +54,7 @@ def parse_int(raw: str | int | float | None) -> int | None:
     if re.search(r"\bstudio\b", s, re.IGNORECASE):
         return 0
     m = _INT_RE.search(s)
-    return int(m.group(1)) if m else None
+    return int(m.group(1).replace(",", "")) if m else None
 
 
 def parse_float(raw: str | int | float | None) -> float | None:

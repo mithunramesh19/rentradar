@@ -18,7 +18,7 @@ from rentradar_workers.permits.attom_client import ATTOMClient, PermitRecord
 
 log = logging.getLogger(__name__)
 
-DB_URL = os.getenv("DATABASE_URL", "postgresql://rentradar:rentradar@localhost:5432/rentradar")
+DB_URL = os.getenv("DATABASE_URL", "postgresql://rentradar:rentradar@localhost:5433/rentradar")
 
 # Alert proximity radius in miles
 PROXIMITY_RADIUS_MILES = 0.25

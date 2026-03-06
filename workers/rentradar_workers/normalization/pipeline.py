@@ -113,8 +113,9 @@ def clean_address(raw: str) -> str:
     # Collapse whitespace
     text = _MULTI_SPACE_RE.sub(" ", text).strip()
 
-    # Title case
+    # Title case, then fix ordinal suffixes that title() uppercases (42Nd → 42nd)
     text = text.title()
+    text = _ORDINAL_RE.sub(lambda m: f"{m.group(1)}{m.group(2).lower()}", text)
 
     return text
 

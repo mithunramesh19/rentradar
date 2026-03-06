@@ -44,7 +44,7 @@ class ATTOMClient:
     """Client for ATTOM Data API with NYC Open Data fallback."""
 
     def __init__(self, api_key: str | None = None):
-        self.api_key = api_key or os.getenv("ATTOM_API_KEY", "")
+        self.api_key = api_key if api_key is not None else os.getenv("ATTOM_API_KEY", "")
         self.session = requests.Session()
         if self.api_key:
             self.session.headers["apikey"] = self.api_key

@@ -19,7 +19,7 @@ def _get_sync_db() -> Session:
     """Create a sync SQLAlchemy session for Celery tasks."""
     url = os.getenv(
         "DATABASE_URL",
-        "postgresql+psycopg2://rentradar:rentradar@localhost:5432/rentradar",
+        "postgresql+psycopg2://rentradar:rentradar@localhost:5433/rentradar",
     )
     engine = create_engine(url)
     return Session(engine)
